@@ -37,18 +37,16 @@ def process_file(file_path: str, device: torch.device):
     coords = generate_circular_array(num_channels)
     geom = ArrayGeometry(coords)
 
-    # Arbitrary target direction for benchmarking
-    target_pan = 45.0
-    target_tilt = 90.0
-
     # --- Benchmark DAS ---
     das_bf = Beamformer(geom, sample_rate=sr, method="DAS")
 
     # Warmup
-    das_bf.forward(signal, target_pan, target_tilt)
+    das_bf.forward(signal, target_pan=None, target_tilt=None)
 
     start_time = time.perf_counter()
-    das_audio, _ = das_bf.forward(signal, target_pan, target_tilt)
+    das_audio, _, das_pan, das_tilt = das_bf.forward(
+        signal, target_pan=None, target_tilt=None
+    )
     if device.type == "cuda":
         torch.cuda.synchronize()
     das_latency = (time.perf_counter() - start_time) * 1000
@@ -57,17 +55,23 @@ def process_file(file_path: str, device: torch.device):
     mvdr_bf = Beamformer(geom, sample_rate=sr, method="MVDR")
 
     # Warmup
-    mvdr_bf.forward(signal, target_pan, target_tilt)
+    mvdr_bf.forward(signal, target_pan=None, target_tilt=None)
 
     start_time = time.perf_counter()
-    mvdr_audio, _ = mvdr_bf.forward(signal, target_pan, target_tilt)
+    mvdr_audio, _, mvdr_pan, mvdr_tilt = mvdr_bf.forward(
+        signal, target_pan=None, target_tilt=None
+    )
     if device.type == "cuda":
         torch.cuda.synchronize()
     mvdr_latency = (time.perf_counter() - start_time) * 1000
 
     print(f"  Channels: {num_channels} | SR: {sr} | Samples: {num_samples}")
-    print(f"  DAS Latency : {das_latency:.2f} ms")
-    print(f"  MVDR Latency: {mvdr_latency:.2f} ms")
+    print(
+        f"  DAS Latency : {das_latency:.2f} ms | Auto-steered to Pan: {das_pan:.1f}, Tilt: {das_tilt:.1f}"
+    )
+    print(
+        f"  MVDR Latency: {mvdr_latency:.2f} ms | Auto-steered to Pan: {mvdr_pan:.1f}, Tilt: {mvdr_tilt:.1f}"
+    )
 
     # Save outputs
     # Need to convert back to CPU and numpy, and to [num_samples] or [num_samples, 1]

@@ -194,8 +194,11 @@ class Beamformer:
             return weights
 
     def forward(
-        self, signal: torch.Tensor, target_pan: float, target_tilt: float
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        self,
+        signal: torch.Tensor,
+        target_pan: Optional[float] = None,
+        target_tilt: Optional[float] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor, float, float]:
         """
         Applies beamforming to the input signal.
 
@@ -247,7 +250,12 @@ class Beamformer:
         # Broadband power (sum across frequencies)
         broadband_spatial_spectrum = scan_power.sum(dim=1)
 
-        # 4. Process Target Angle
+        # 4. Select Target Angle
+        if target_pan is None or target_tilt is None:
+            best_idx = torch.argmax(broadband_spatial_spectrum)
+            target_pan = self.scan_pan[best_idx].item()
+            target_tilt = self.scan_tilt[best_idx].item()
+
         target_pan_tensor = torch.tensor(
             [target_pan], dtype=torch.float32, device=device
         )
@@ -282,7 +290,7 @@ class Beamformer:
             0
         )  # back to [num_samples]
 
-        return output_audio, broadband_spatial_spectrum
+        return output_audio, broadband_spatial_spectrum, target_pan, target_tilt
 
 
 def main():
@@ -327,7 +335,9 @@ def main():
     start_time = time.perf_counter()
     num_runs = 50
     for _ in range(num_runs):
-        audio_out, spectrum = das_bf.forward(signal, target_pan, target_tilt)
+        audio_out, spectrum, best_pan, best_tilt = das_bf.forward(
+            signal, target_pan, target_tilt
+        )
         if device.type == "cuda":
             torch.cuda.synchronize()
     end_time = time.perf_counter()
@@ -350,7 +360,9 @@ def main():
 
     start_time = time.perf_counter()
     for _ in range(num_runs):
-        audio_out, spectrum = mvdr_bf.forward(signal, target_pan, target_tilt)
+        audio_out, spectrum, best_pan, best_tilt = mvdr_bf.forward(
+            signal, target_pan, target_tilt
+        )
         if device.type == "cuda":
             torch.cuda.synchronize()
     end_time = time.perf_counter()
