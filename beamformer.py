@@ -183,7 +183,10 @@ class Beamformer:
 
             # Compute denominator: V^H * R^-1 * V
             # denom: [num_freqs, num_angles]
-            denom = torch.einsum("fna,fna->fa", V.conj(), inv_R_V)
+            denom = torch.einsum("fna,fna->fa", V.conj(), inv_R_V).real
+
+            # Avoid division by zero or extremely small numbers
+            denom = torch.clamp(denom, min=1e-9)
 
             # W = (R^-1 * V) / (V^H * R^-1 * V)
             # W_mvdr: [num_freqs, N, num_angles]
