@@ -6,7 +6,7 @@ import re
 import torch
 import soundfile as sf
 import numpy as np
-from beamformer import ArrayGeometry, Beamformer
+from beamformer import ArrayGeometry, Beamformer, get_optimal_das_beamformer
 
 
 def parse_array_geometry(filepath: str) -> torch.Tensor:
@@ -91,18 +91,29 @@ def process_file(file_path: str, device: torch.device):
     geom = ArrayGeometry(coords)
 
     # --- Benchmark DAS ---
-    das_bf = Beamformer(geom, sample_rate=sr, method="DAS")
-
-    # Warmup
-    das_bf.forward(signal, target_pan=None, target_tilt=None)
+    das_bf = get_optimal_das_beamformer(geom, sr, num_channels, device)
 
     start_time = time.perf_counter()
-    das_audio, _, das_pan, das_tilt = das_bf.forward(
-        signal, target_pan=None, target_tilt=None
-    )
-    if device.type == "cuda":
-        torch.cuda.synchronize()
-    das_latency = (time.perf_counter() - start_time) * 1000
+    if hasattr(das_bf, "process_chunk"):
+        # Numba backend execution
+        _pan, _tilt = 45.0, 90.0  # Numba does not auto-steer, fallback to center
+        das_bf.set_direction(_pan, _tilt)
+        das_audio_np = das_bf.process_chunk(audio_np.T)
+        das_latency = (time.perf_counter() - start_time) * 1000
+        # Numba doesn't generate wind scores currently, mock them
+        das_audio = torch.from_numpy(das_audio_np)
+        das_pan, das_tilt = _pan, _tilt
+        das_scores = {"sci": 0.0, "array_gain": 0.0}
+    else:
+        # PyTorch backend execution
+        das_bf.forward(signal, target_pan=None, target_tilt=None)  # Warmup
+        start_time = time.perf_counter()
+        das_audio, _, das_pan, das_tilt, das_scores = das_bf.forward(
+            signal, target_pan=None, target_tilt=None
+        )
+        if device.type == "cuda":
+            torch.cuda.synchronize()
+        das_latency = (time.perf_counter() - start_time) * 1000
 
     # --- Benchmark MVDR ---
     mvdr_bf = Beamformer(geom, sample_rate=sr, method="MVDR")
@@ -111,7 +122,7 @@ def process_file(file_path: str, device: torch.device):
     mvdr_bf.forward(signal, target_pan=None, target_tilt=None)
 
     start_time = time.perf_counter()
-    mvdr_audio, _, mvdr_pan, mvdr_tilt = mvdr_bf.forward(
+    mvdr_audio, _, mvdr_pan, mvdr_tilt, mvdr_scores = mvdr_bf.forward(
         signal, target_pan=None, target_tilt=None
     )
     if device.type == "cuda":
@@ -122,8 +133,16 @@ def process_file(file_path: str, device: torch.device):
     print(
         f"  DAS Latency : {das_latency:.2f} ms | Auto-steered to Pan: {das_pan:.1f}, Tilt: {das_tilt:.1f}"
     )
+    if not hasattr(das_bf, "process_chunk"):
+        print(
+            f"      Wind Rejection -> SCI: {das_scores['sci']:.4f}, Array Gain: {das_scores['array_gain']:.4f}"
+        )
+
     print(
         f"  MVDR Latency: {mvdr_latency:.2f} ms | Auto-steered to Pan: {mvdr_pan:.1f}, Tilt: {mvdr_tilt:.1f}"
+    )
+    print(
+        f"      Wind Rejection -> SCI: {mvdr_scores['sci']:.4f}, Array Gain: {mvdr_scores['array_gain']:.4f}"
     )
 
     # Save outputs

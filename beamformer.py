@@ -293,7 +293,46 @@ class Beamformer:
             0
         )  # back to [num_samples]
 
-        return output_audio, broadband_spatial_spectrum, target_pan, target_tilt
+        # --- Wind Rejection Features ---
+        # 1. Spatial Coherence Index (SCI): Mean off-diagonal of the normalized SCM
+        # R shape: [num_freqs, N, N].
+        # Normalize R to coherence matrix C: C_ij = |R_ij|^2 / (R_ii * R_jj)
+
+        # Power per channel per freq: [num_freqs, N]
+        P_ch = torch.diagonal(R, dim1=-2, dim2=-1).real.clamp(min=1e-9)
+
+        # Denominator matrix for coherence: sqrt(P_i * P_j)
+        # [num_freqs, N, 1] * [num_freqs, 1, N] -> [num_freqs, N, N]
+        denom_coh = torch.sqrt(P_ch.unsqueeze(-1) * P_ch.unsqueeze(-2))
+
+        # Magnitude Squared Coherence (MSC): [num_freqs, N, N]
+        msc = (R.abs() ** 2) / denom_coh.clamp(min=1e-9)
+
+        # Average MSC over frequencies (broadband SCI)
+        msc_mean = msc.mean(dim=0)
+
+        # Extract mean of off-diagonal elements (exclude self-coherence which is 1.0)
+        N_ch = msc_mean.shape[0]
+        off_diag_mask = ~torch.eye(N_ch, dtype=torch.bool, device=device)
+        spatial_coherence_index = msc_mean[off_diag_mask].mean().item()
+
+        # 2. Beamformer Consistency (Array Gain G = P_beam / P_raw)
+        # P_raw is the average power of the raw microphones
+        p_raw = torch.mean(signal**2).item()
+        p_beam = torch.mean(output_audio**2).item()
+
+        array_gain = p_beam / max(p_raw, 1e-9)
+
+        # Package scores
+        wind_scores = {"sci": spatial_coherence_index, "array_gain": array_gain}
+
+        return (
+            output_audio,
+            broadband_spatial_spectrum,
+            target_pan,
+            target_tilt,
+            wind_scores,
+        )
 
 
 def main():
@@ -338,7 +377,7 @@ def main():
     start_time = time.perf_counter()
     num_runs = 50
     for _ in range(num_runs):
-        audio_out, spectrum, best_pan, best_tilt = das_bf.forward(
+        audio_out, spectrum, best_pan, best_tilt, _ = das_bf.forward(
             signal, target_pan, target_tilt
         )
         if device.type == "cuda":
@@ -363,7 +402,7 @@ def main():
 
     start_time = time.perf_counter()
     for _ in range(num_runs):
-        audio_out, spectrum, best_pan, best_tilt = mvdr_bf.forward(
+        audio_out, spectrum, best_pan, best_tilt, _ = mvdr_bf.forward(
             signal, target_pan, target_tilt
         )
         if device.type == "cuda":
@@ -380,3 +419,30 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+def get_optimal_das_beamformer(
+    geom: ArrayGeometry, sample_rate: int, num_channels: int, device: torch.device
+):
+    """
+    Smart dispatcher for DAS beamforming.
+    - If CUDA is available, always use PyTorch Frequency Domain.
+    - If CPU only and num_channels is large (e.g., >32), use Numba Time Domain for lower latency.
+    - Otherwise, use PyTorch Frequency Domain.
+    """
+    if device.type == "cuda":
+        print("  -> Smart Dispatch: Using PyTorch (CUDA)")
+        return Beamformer(geom, sample_rate=sample_rate, method="DAS")
+
+    if num_channels >= 32:
+        try:
+            from numba_backend import NumbaDASBeamformer
+
+            print("  -> Smart Dispatch: Using Numba (CPU Optimized)")
+            return NumbaDASBeamformer(geom.sensor_coords.cpu().numpy(), sample_rate)
+        except ImportError:
+            print("  -> Smart Dispatch: Numba not found, falling back to PyTorch")
+            pass
+
+    print("  -> Smart Dispatch: Using PyTorch (CPU)")
+    return Beamformer(geom, sample_rate=sample_rate, method="DAS")
