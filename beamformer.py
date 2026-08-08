@@ -301,9 +301,9 @@ class Beamformer:
         # Power per channel per freq: [num_freqs, N]
         P_ch = torch.diagonal(R, dim1=-2, dim2=-1).real.clamp(min=1e-9)
 
-        # Denominator matrix for coherence: sqrt(P_i * P_j)
+        # Denominator matrix for coherence: (P_i * P_j)
         # [num_freqs, N, 1] * [num_freqs, 1, N] -> [num_freqs, N, N]
-        denom_coh = torch.sqrt(P_ch.unsqueeze(-1) * P_ch.unsqueeze(-2))
+        denom_coh = P_ch.unsqueeze(-1) * P_ch.unsqueeze(-2)
 
         # Magnitude Squared Coherence (MSC): [num_freqs, N, N]
         msc = (R.abs() ** 2) / denom_coh.clamp(min=1e-9)
