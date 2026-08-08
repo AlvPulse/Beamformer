@@ -123,7 +123,7 @@ def main(input_dir, output_dir, geom_path, chunk_duration, sci_threshold):
                 total_chunks += 1
 
                 # Save the 1D beamformed clip so the user can listen to the classification
-                out_name = f"{file_basename}_chunk{i:03d}_{category}_SCI{sci:.1f}_pan{int(best_pan)}.wav"
+                out_name = f"{file_basename}_chunk{i:03d}_{category}_SCI{sci:.4f}_pan{int(best_pan)}.wav"
                 sf.write(os.path.join(target_dir, out_name), out_np, sr)
 
         except Exception as e:

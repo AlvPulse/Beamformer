@@ -308,8 +308,15 @@ class Beamformer:
         # Magnitude Squared Coherence (MSC): [num_freqs, N, N]
         msc = (R.abs() ** 2) / denom_coh.clamp(min=1e-9)
 
-        # Average MSC over frequencies (broadband SCI)
-        msc_mean = msc.mean(dim=0)
+        # Average MSC over frequencies (band-limited SCI: 300Hz to 3000Hz)
+        # This prevents uncorrelated high-frequency ambient noise from dragging the speech coherence to zero.
+        freq_bins = self.freqs
+        valid_bins = (freq_bins >= 300) & (freq_bins <= 3000)
+
+        if valid_bins.any():
+            msc_mean = msc[valid_bins].mean(dim=0)
+        else:
+            msc_mean = msc.mean(dim=0)  # Fallback if SR is extremely low
 
         # Extract mean of off-diagonal elements (exclude self-coherence which is 1.0)
         N_ch = msc_mean.shape[0]
