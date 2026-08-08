@@ -147,8 +147,8 @@ class Beamformer:
             trace_R.unsqueeze(-1).unsqueeze(-1) > 0, loading, fallback_loading
         )
 
-        R = R + loading
-        return R
+        R_loaded = R + loading
+        return R_loaded, R
 
     def _compute_weights(
         self, steering_vectors: torch.Tensor, R: Optional[torch.Tensor] = None
@@ -236,7 +236,7 @@ class Beamformer:
         X = X.permute(1, 0, 2)
 
         # 2. Compute SCM (needed for MVDR, and useful for computing spatial spectrum power)
-        R = self._compute_scm(X)
+        R, R_raw = self._compute_scm(X)
 
         # 3. Compute Spatial Spectrum for the scanning grid
         # Weights for the scanning grid: [num_scan_angles, num_freqs, N]
@@ -299,24 +299,30 @@ class Beamformer:
         # Normalize R to coherence matrix C: C_ij = |R_ij|^2 / (R_ii * R_jj)
 
         # Power per channel per freq: [num_freqs, N]
-        P_ch = torch.diagonal(R, dim1=-2, dim2=-1).real.clamp(min=1e-9)
+        P_ch = torch.diagonal(R_raw, dim1=-2, dim2=-1).real.clamp(min=1e-9)
 
         # Denominator matrix for coherence: (P_i * P_j)
         # [num_freqs, N, 1] * [num_freqs, 1, N] -> [num_freqs, N, N]
         denom_coh = P_ch.unsqueeze(-1) * P_ch.unsqueeze(-2)
 
         # Magnitude Squared Coherence (MSC): [num_freqs, N, N]
-        msc = (R.abs() ** 2) / denom_coh.clamp(min=1e-9)
+        msc = (R_raw.abs() ** 2) / denom_coh.clamp(min=1e-9)
 
-        # Average MSC over frequencies (band-limited SCI: 300Hz to 3000Hz)
-        # This prevents uncorrelated high-frequency ambient noise from dragging the speech coherence to zero.
-        freq_bins = self.freqs
-        valid_bins = (freq_bins >= 300) & (freq_bins <= 3000)
+        # SNR-weighted SCI: Compute average coherence only over frequencies that contain significant energy.
+        # This prevents high-frequency microphone hiss or out-of-band noise from dragging the score to zero.
+        power_spectrum = torch.mean(P_ch, dim=1)  # [num_freqs]
+        max_power = torch.max(power_spectrum)
+
+        # Consider bins within 20dB (0.01 power ratio) of the peak energy
+        valid_bins = power_spectrum > (max_power * 0.01)
+
+        # Also enforce a minimum bound to ignore ultra-low sub-bass wind rumble (e.g. < 50Hz)
+        valid_bins = valid_bins & (self.freqs > 50)
 
         if valid_bins.any():
             msc_mean = msc[valid_bins].mean(dim=0)
         else:
-            msc_mean = msc.mean(dim=0)  # Fallback if SR is extremely low
+            msc_mean = msc.mean(dim=0)  # Fallback
 
         # Extract mean of off-diagonal elements (exclude self-coherence which is 1.0)
         N_ch = msc_mean.shape[0]

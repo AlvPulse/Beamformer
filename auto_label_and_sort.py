@@ -34,14 +34,18 @@ def generate_circular_array(num_sensors: int, radius: float = 0.1) -> torch.Tens
     return torch.stack([radius * torch.cos(angles), radius * torch.sin(angles)], dim=-1)
 
 
-def main(input_dir, output_dir, geom_path, chunk_duration, sci_threshold):
+def main(
+    input_dir, output_dir, geom_path, chunk_duration, sci_threshold, energy_threshold
+):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Starting Auto-Labeler on {device}...")
 
     wind_dir = os.path.join(output_dir, "wind")
     event_dir = os.path.join(output_dir, "event")
+    silence_dir = os.path.join(output_dir, "silence")
     os.makedirs(wind_dir, exist_ok=True)
     os.makedirs(event_dir, exist_ok=True)
+    os.makedirs(silence_dir, exist_ok=True)
 
     wav_files = glob.glob(os.path.join(input_dir, "**", "*.wav"), recursive=True)
     if not wav_files:
@@ -53,6 +57,7 @@ def main(input_dir, output_dir, geom_path, chunk_duration, sci_threshold):
     total_chunks = 0
     wind_count = 0
     event_count = 0
+    silence_count = 0
 
     for filepath in wav_files:
         print(f"Processing: {filepath}")
@@ -133,6 +138,7 @@ def main(input_dir, output_dir, geom_path, chunk_duration, sci_threshold):
     print(f"Total Chunks Processed : {total_chunks}")
     print(f"Chunks labeled WIND    : {wind_count}")
     print(f"Chunks labeled EVENT   : {event_count}")
+    print(f"Chunks labeled SILENCE : {silence_count}")
     print(f"Outputs saved to       : {output_dir}/")
 
 
@@ -171,6 +177,12 @@ if __name__ == "__main__":
         help="SCI threshold to classify Wind vs Event",
     )
 
+    parser.add_argument(
+        "--energy_threshold",
+        type=float,
+        default=1e-4,
+        help="RMS energy threshold to ignore silence/ambient",
+    )
     args = parser.parse_args()
     main(
         args.input_dir,
@@ -178,4 +190,5 @@ if __name__ == "__main__":
         args.geometry,
         args.chunk_duration,
         args.sci_threshold,
+        args.energy_threshold,
     )
