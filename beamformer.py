@@ -336,8 +336,63 @@ class Beamformer:
 
         array_gain = p_beam / max(p_raw, 1e-9)
 
+        # 3. Phase Variance
+        w_t = target_weights.squeeze(0)
+        X_aligned = X * w_t.conj().unsqueeze(-1)
+        if valid_bins.any():
+            X_active = X_aligned[valid_bins]
+        else:
+            X_active = X_aligned
+        phase_vectors = X_active / (X_active.abs() + 1e-9)
+        mean_phase_vector = phase_vectors.mean(dim=1)
+        phase_variance = 1.0 - mean_phase_vector.abs().mean().item()
+
+        # 4. Spectral Persistence
+        P_frames = X_active.abs() ** 2
+        P_frames_mean = P_frames.mean(dim=1)
+        if P_frames_mean.shape[1] > 1:
+            frame_t0 = P_frames_mean[:, :-1]
+            frame_t1 = P_frames_mean[:, 1:]
+            mu_0 = frame_t0.mean(dim=0, keepdim=True)
+            mu_1 = frame_t1.mean(dim=0, keepdim=True)
+            num = ((frame_t0 - mu_0) * (frame_t1 - mu_1)).sum(dim=0)
+            den = torch.sqrt(
+                ((frame_t0 - mu_0) ** 2).sum(dim=0)
+                * ((frame_t1 - mu_1) ** 2).sum(dim=0)
+            )
+            persistence = (num / (den + 1e-9)).mean().item()
+        else:
+            persistence = 0.0
+
+        # 5. Nullspace Energy
+        target_v = target_sv.squeeze(0)
+        if valid_bins.any():
+            R_active = R_raw[valid_bins]
+            v_active = target_v[valid_bins]
+        else:
+            R_active = R_raw
+            v_active = target_v
+
+        total_energy = torch.diagonal(R_active, dim1=-2, dim2=-1).real.sum(dim=-1)
+        v_norm = (v_active.abs() ** 2).sum(dim=-1)
+        manifold_energy = torch.einsum(
+            "fn,fnm,fm->f", v_active.conj(), R_active, v_active
+        ).real / (v_norm + 1e-9)
+        nullspace_energy = (
+            ((total_energy - manifold_energy) / (total_energy + 1e-9))
+            .clamp(min=0.0, max=1.0)
+            .mean()
+            .item()
+        )
+
         # Package scores
-        wind_scores = {"sci": spatial_coherence_index, "array_gain": array_gain}
+        wind_scores = {
+            "sci": spatial_coherence_index,
+            "array_gain": array_gain,
+            "phase_variance": phase_variance,
+            "persistence": persistence,
+            "nullspace": nullspace_energy,
+        }
 
         return (
             output_audio,

@@ -5,6 +5,7 @@ import numpy as np
 import soundfile as sf
 import torch
 import re
+import csv
 
 from beamformer import ArrayGeometry, Beamformer
 
@@ -46,6 +47,22 @@ def main(
     os.makedirs(wind_dir, exist_ok=True)
     os.makedirs(event_dir, exist_ok=True)
     os.makedirs(silence_dir, exist_ok=True)
+
+    csv_file = os.path.join(output_dir, "metrics.csv")
+    with open(csv_file, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(
+            [
+                "Filename",
+                "Chunk",
+                "Category",
+                "SCI",
+                "ArrayGain",
+                "PhaseVariance",
+                "Persistence",
+                "Nullspace",
+            ]
+        )
 
     wav_files = glob.glob(os.path.join(input_dir, "**", "*.wav"), recursive=True)
     if not wav_files:
@@ -131,6 +148,22 @@ def main(
                 out_name = f"{file_basename}_chunk{i:03d}_{category}_SCI{sci:.4f}_pan{int(best_pan)}.wav"
                 sf.write(os.path.join(target_dir, out_name), out_np, sr)
 
+                # Write to CSV
+                with open(csv_file, "a", newline="") as f:
+                    writer = csv.writer(f)
+                    writer.writerow(
+                        [
+                            out_name,
+                            i,
+                            category,
+                            f"{sci:.4f}",
+                            f"{scores.get('array_gain', 0.0):.4f}",
+                            f"{scores.get('phase_variance', 0.0):.4f}",
+                            f"{scores.get('persistence', 0.0):.4f}",
+                            f"{scores.get('nullspace', 0.0):.4f}",
+                        ]
+                    )
+
         except Exception as e:
             print(f"  Error: {e}")
 
@@ -173,7 +206,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--sci_threshold",
         type=float,
-        default=3.0,
+        default=0.1,
         help="SCI threshold to classify Wind vs Event",
     )
 
