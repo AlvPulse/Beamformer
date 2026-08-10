@@ -1,6 +1,22 @@
 import numpy as np
+import re
+import os
+from typing import Union
 from numba_backend import NumbaDASBeamformer
 
+def load_geometry(filepath: str) -> np.ndarray:
+    """Read x=[...] y=[...] and return (N,2) float32 array in metres."""
+    with open(filepath, 'r') as f:
+        content = f.read()
+    xm = re.search(r'x\s*=\s*\[(.*?)\]', content, re.DOTALL)
+    ym = re.search(r'y\s*=\s*\[(.*?)\]', content, re.DOTALL)
+    if not xm or not ym:
+        raise ValueError("File must contain x=[...] and y=[...]")
+    x = [float(v.strip()) for v in xm.group(1).split(',') if v.strip()]
+    y = [float(v.strip()) for v in ym.group(1).split(',') if v.strip()]
+    if len(x) != len(y) or len(x) == 0:
+        raise ValueError("Coordinate lists empty or mismatched")
+    return np.column_stack((x, y)).astype(np.float32)
 
 class FastAcousticPipeline:
     """
@@ -10,14 +26,21 @@ class FastAcousticPipeline:
     Uses CPU-optimized Numba backend for Fractional Delay DAS.
     """
 
-    def __init__(self, sensor_coords: np.ndarray, sample_rate: int = 8000):
+    def __init__(self, geometry_source: Union[np.ndarray, str], sample_rate: int = 8000):
         """
         Initialize the pipeline once.
 
         Args:
-            sensor_coords: [N, 2] numpy array of (x,y) microphone coordinates in meters.
+            geometry_source: Either an [N, 2] numpy array, or a filepath string to array_geometry.txt
             sample_rate: Sampling rate of the audio (default 8000).
         """
+        if isinstance(geometry_source, str):
+            if not os.path.exists(geometry_source):
+                raise FileNotFoundError(f"Geometry file not found: {geometry_source}")
+            sensor_coords = load_geometry(geometry_source)
+        else:
+            sensor_coords = geometry_source
+
         # Instantiate the fast Numba DAS engine
         self.beamformer = NumbaDASBeamformer(sensor_coords, sample_rate)
         self.N = sensor_coords.shape[0]
